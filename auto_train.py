@@ -4,6 +4,7 @@
 """
 АВТОМАТИЧЕСКОЕ ПЕРЕОБУЧЕНИЕ МОДЕЛЕЙ
 Запускается при добавлении новых данных в БД
+Использует умное обучение (smart_train) с автовыбором модели
 """
 
 import os
@@ -74,15 +75,11 @@ def auto_train():
     print(f"   Новый хеш: {current_hash[:16]}...")
     print(f"   Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    print("\n🚀 Запуск обучения Random Forest моделей...")
+    print("\n🚀 Запуск умного обучения...")
     
     try:
-        from train_advanced_models import train_sector_models
-        models, results = train_sector_models()
-        
-        print("\n🚀 Запуск обучения нейросетевых моделей...")
-        from train_neural_models import train_neural_models
-        neural_models, neural_reports = train_neural_models(force_retrain=True)
+        from smart_train import smart_train
+        results = smart_train()
         
         save_current_hash(current_hash)
         
@@ -90,9 +87,9 @@ def auto_train():
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'data_hash': current_hash,
             'previous_hash': last_hash,
-            'models_trained_rf': list(results.keys()),
-            'models_trained_neural': list(neural_reports.keys()),
-            'status': 'success'
+            'models_trained': list(results.keys()),
+            'status': 'success',
+            'details': results
         }
         
         report_path = "models/auto_train_report.json"
@@ -128,16 +125,19 @@ def get_training_info():
         'models_status': {}
     }
     
-    history_path = "models/training_history.json"
-    if os.path.exists(history_path):
-        with open(history_path, 'r', encoding='utf-8') as f:
-            history = json.load(f)
-            info['last_training'] = history.get('last_training')
-            info['models_status'] = history.get('reports', {})
+    # Загружаем последний отчёт об обучении
+    report_path = "models/auto_train_report.json"
+    if os.path.exists(report_path):
+        with open(report_path, 'r', encoding='utf-8') as f:
+            report = json.load(f)
+            info['last_training'] = report.get('timestamp')
+            info['models_status'] = report.get('details', {})
     
+    # Загружаем хеш данных
     last_hash = load_last_hash()
     info['data_hash'] = last_hash
     
+    # Проверяем, изменились ли данные
     current_hash = get_data_hash()
     info['data_changed_since_last'] = (current_hash != last_hash) if last_hash else True
     
@@ -158,9 +158,15 @@ if __name__ == "__main__":
         print(f"Хеш данных: {info['data_hash'][:16] if info['data_hash'] else 'None'}...")
         print(f"Данные изменились: {'Да' if info['data_changed_since_last'] else 'Нет'}")
         print(f"\nМодели:")
-        for sector, report in info['models_status'].items():
-            metrics = report.get('metrics', {})
-            print(f"  • {sector}: R²={metrics.get('test_r2', '?')}, MAE={metrics.get('test_mae', '?')}")
+        for sector, status in info['models_status'].items():
+            model_type = status.get('model_type', '?')
+            data_size = status.get('data_size', '?')
+            if status.get('trained'):
+                r2 = status.get('test_r2', '?')
+                mae = status.get('test_mae', '?')
+                print(f"  • {sector}: {model_type} | данные={data_size} | R²={r2} | MAE={mae}")
+            else:
+                print(f"  • {sector}: {model_type} | данные={data_size}")
     elif args.force:
         auto_train()
     else:
