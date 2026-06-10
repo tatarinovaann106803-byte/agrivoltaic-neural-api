@@ -2,8 +2,11 @@ name: Update Dataset and Retrain Models
 
 on:
   schedule:
-    - cron: "0 0 * * 0"          # каждое воскресенье в 00:00 UTC
-  workflow_dispatch:              # возможность запуска вручную
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   update-data:
@@ -27,8 +30,23 @@ jobs:
       - name: Prepare sector datasets
         run: python prepare_dataset_advanced.py
       
-      - name: Retrain models
-        run: python smart_train.py
+      - name: Clean datasets (remove NaN)
+        run: |
+          python -c "
+import pandas as pd
+for sector in ['crop_farming', 'aquaculture', 'forestry']:
+    df = pd.read_csv(f'dataset/sector_data/{sector}.csv')
+    before = len(df)
+    df = df.dropna()
+    df.to_csv(f'dataset/sector_data/{sector}.csv', index=False)
+    print(f'{sector}: {before} -> {len(df)} rows')
+"
+      
+      - name: Train Random Forest models
+        run: python train_advanced_models.py
+      
+      - name: Train Neural Network models (if enough data)
+        run: python train_neural_models.py || echo "Neural network training skipped (not enough data)"
       
       - name: Commit and push if changed
         run: |
