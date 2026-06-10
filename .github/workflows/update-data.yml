@@ -2,8 +2,8 @@ name: Update Dataset and Retrain Models
 
 on:
   schedule:
-    - cron: "0 0 * * 0"
-  workflow_dispatch:
+    - cron: "0 0 * * 0"          # каждое воскресенье в 00:00 UTC
+  workflow_dispatch:              # возможность запуска вручную
 
 jobs:
   update-data:
@@ -21,15 +21,19 @@ jobs:
       - name: Install dependencies
         run: pip install pandas numpy scikit-learn requests
       
-      - name: Update datasets and retrain models
-        run: |
-          python prepare_dataset_advanced.py
-          python smart_train.py
+      - name: Download data from Google Sheets
+        run: python download_data.py
+      
+      - name: Prepare sector datasets
+        run: python prepare_dataset_advanced.py
+      
+      - name: Retrain models
+        run: python smart_train.py
       
       - name: Commit and push if changed
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add dataset/ models/ data/
+          git add dataset/ models/
           git commit -m "Auto-update: refresh datasets and retrain models $(date '+%Y-%m-%d')" || exit 0
           git push
