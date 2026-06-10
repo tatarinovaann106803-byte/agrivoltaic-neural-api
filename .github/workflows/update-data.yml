@@ -33,16 +33,7 @@ jobs:
         run: python prepare_dataset_advanced.py
       
       - name: Clean datasets (remove NaN)
-        run: |
-          python -c "
-import pandas as pd
-for sector in ['crop_farming', 'aquaculture', 'forestry']:
-    df = pd.read_csv(f'dataset/sector_data/{sector}.csv')
-    before = len(df)
-    df = df.dropna()
-    df.to_csv(f'dataset/sector_data/{sector}.csv', index=False)
-    print(f'{sector}: {before} -> {len(df)} rows')
-"
+        run: python clean_datasets.py
       
       - name: Train Random Forest models
         run: python train_advanced_models.py
