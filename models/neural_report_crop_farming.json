@@ -1,0 +1,51 @@
+{
+  "sector": "Растениеводство",
+  "training_date": "2026-06-10 14:40:04",
+  "model_type": "MLPRegressor (нейросеть)",
+  "architecture": {
+    "hidden_layers": [
+      100,
+      50,
+      25
+    ],
+    "activation": "relu",
+    "solver": "adam",
+    "max_iter": 1000
+  },
+  "training_data": {
+    "n_samples_train": 75,
+    "n_samples_test": 19,
+    "total_samples": 94,
+    "features": [
+      "latitude",
+      "longitude",
+      "shade_tolerance",
+      "optimal_temp",
+      "water_requirement",
+      "growing_days"
+    ]
+  },
+  "metrics": {
+    "train_mae": 28.374571979510424,
+    "test_mae": 24.5950434133349,
+    "train_rmse": 52.2506207091011,
+    "test_rmse": 35.8326910043987,
+    "train_r2": -0.20719095207647142,
+    "test_r2": -0.5934702071338382
+  },
+  "n_iterations": 124,
+  "loss_curve": [
+    1428.1974743145029,
+    1413.3586439944231,
+    1401.4509137857115,
+    1391.969292387813,
+    1384.4312969358089,
+    1378.3619942814344,
+    1373.2843197491445,
+    1368.8074926137433,
+    1364.5593536629954,
+    1360.245254145596
+  ],
+  "data_source": "dataset/sector_data/crop_farming.csv",
+  "data_rows": 94
+}
