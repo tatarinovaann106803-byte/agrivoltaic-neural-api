@@ -13,7 +13,7 @@ import urllib.request
 import json
 from datetime import datetime
 
-app = FastAPI(title="Agrivoltaic Calculator API", version="2.4")
+app = FastAPI(title="Agrivoltaic Calculator API", version="2.5")
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,17 +42,8 @@ def load_faostat_yield():
         return pd.DataFrame()
 
 def load_aquaculture_value():
-    """Стоимость аквакультуры из FAO FishStatJ (USD 1000)"""
     try:
         df = pd.read_csv('data/aquaculture_value.csv')
-        return df
-    except:
-        return pd.DataFrame()
-
-def load_aquaculture_production():
-    """Производство аквакультуры из FAO FishStatJ (тонны)"""
-    try:
-        df = pd.read_csv('data/aquaculture_production.csv')
         return df
     except:
         return pd.DataFrame()
@@ -64,174 +55,77 @@ def load_forestry_value():
     except:
         return pd.DataFrame()
 
-# Загружаем все базы
 crop_prices_df = load_crop_prices()
 faostat_yield_df = load_faostat_yield()
 aquaculture_value_df = load_aquaculture_value()
-aquaculture_production_df = load_aquaculture_production()
 forestry_value_df = load_forestry_value()
 
 # ========== ФУНКЦИИ ДЛЯ АВТОМАТИЧЕСКОЙ ПОДСТАНОВКИ ==========
 
-# 1. РАСТЕНИЕВОДСТВО
-
 def get_crop_price(crop_name: str, region: str = None) -> float:
     if crop_prices_df.empty:
         return 30.0
-    
     crop_prices_df_filtered = crop_prices_df[crop_prices_df['crop'] == crop_name]
     if crop_prices_df_filtered.empty:
         return 30.0
-    
     if region and region in crop_prices_df_filtered['region'].values:
         price = crop_prices_df_filtered[crop_prices_df_filtered['region'] == region]['price_rub_per_kg'].values[0]
         return float(price)
     else:
-        avg_price = crop_prices_df_filtered['price_rub_per_kg'].mean()
-        return float(avg_price)
+        return float(crop_prices_df_filtered['price_rub_per_kg'].mean())
 
 def get_crop_yield(crop_name: str, country: str = "Russian Federation") -> float:
     if faostat_yield_df.empty:
         return 10000.0
-    
     crop_mapping = {
         "Пшеница": "Wheat", "Кукуруза": "Maize", "Соя": "Soybeans",
         "Подсолнечник": "Sunflower seed", "Картофель": "Potatoes",
         "Сахарная свекла": "Sugar beet", "Овощи": "Vegetables"
     }
     english_name = crop_mapping.get(crop_name, crop_name)
-    
     df_filtered = faostat_yield_df[
         (faostat_yield_df['Item'] == english_name) &
         (faostat_yield_df['Area'] == country)
     ]
-    
     if not df_filtered.empty:
         value = df_filtered['Value'].values[0]
         if pd.notna(value):
             return float(value)
     return 10000.0
 
-
-# 2. АКВАКУЛЬТУРА
-
-def get_aquaculture_value(species: str, environment: str = "Freshwater") -> float:
-    """
-    Получение стоимости аквакультуры (руб/кг)
-    Источник: FAO FishStatJ (Value USD 1000)
-    """
+def get_aquaculture_value(species: str) -> float:
     if aquaculture_value_df.empty:
         return 150.0
-    
-    # Сопоставление русских названий с английскими (ASFIS)
-    species_mapping = {
-        "Карп": "Common carp",
-        "Тилапия": "Nile tilapia",
-        "Форель": "Rainbow trout",
-        "Сом": "Catfish nei",
-        "Осетр": "Sturgeons nei",
-        "Лосось": "Atlantic salmon",
-        "Креветка": "Penaeus shrimps",
-        "Мидия": "Mussels",
-        "Устрица": "Oysters"
-    }
-    
-    english_name = species_mapping.get(species, species)
-    
-    # Фильтруем по виду и среде выращивания
-    df_filtered = aquaculture_value_df[
-        (aquaculture_value_df['ASFIS species (Name)'] == english_name) &
-        (aquaculture_value_df['Environment (Name)'] == environment)
-    ]
-    
-    if df_filtered.empty:
-        # Пробуем без фильтра по среде
-        df_filtered = aquaculture_value_df[aquaculture_value_df['ASFIS species (Name)'] == english_name]
-    
-    if not df_filtered.empty:
-        # Находим столбцы с годами
-        year_cols = [c for c in df_filtered.columns if str(c).isdigit() or (str(c).startswith('[') and str(c).endswith(']'))]
-        year_cols_clean = []
-        for c in year_cols:
-            try:
-                year = int(str(c).strip('[]'))
-                year_cols_clean.append((year, c))
-            except:
-                pass
-        
-        if year_cols_clean:
-            # Берём последний доступный год (максимальный)
-            year_cols_clean.sort(reverse=True)
-            for year, col in year_cols_clean:
-                value = df_filtered[col].values[0]
-                if pd.notna(value) and value > 0:
-                    # Конвертация: из 1000 USD в рубли за кг
-                    # 1000 USD = ~100000 руб (курс 100)
-                    # value уже в тысячах USD, значит value * 1000 = USD
-                    usd_value = float(value) * 1000
-                    rub_value = usd_value * 100  # курс 100 руб за USD
-                    # Возвращаем цену за кг (условно делим на 1000)
-                    return rub_value / 1000
-    
-    return 150.0
-
-def get_aquaculture_production(species: str, country: str = "Russian Federation", environment: str = "Freshwater") -> float:
-    """
-    Получение объёма производства аквакультуры (тонны)
-    Источник: FAO FishStatJ (Production)
-    """
-    if aquaculture_production_df.empty:
-        return 10.0
-    
     species_mapping = {
         "Карп": "Common carp", "Тилапия": "Nile tilapia",
         "Форель": "Rainbow trout", "Сом": "Catfish nei", "Осетр": "Sturgeons nei"
     }
     english_name = species_mapping.get(species, species)
-    
-    df_filtered = aquaculture_production_df[
-        (aquaculture_production_df['ASFIS species (Name)'] == english_name) &
-        (aquaculture_production_df['Country (Name)'] == country) &
-        (aquaculture_production_df['Environment (Name)'] == environment)
-    ]
-    
-    if df_filtered.empty:
-        df_filtered = aquaculture_production_df[
-            (aquaculture_production_df['ASFIS species (Name)'] == english_name) &
-            (aquaculture_production_df['Country (Name)'] == country)
-        ]
-    
+    df_filtered = aquaculture_value_df[aquaculture_value_df['ASFIS species (Name)'] == english_name]
     if not df_filtered.empty:
         year_cols = [c for c in df_filtered.columns if str(c).isdigit() or (str(c).startswith('[') and str(c).endswith(']'))]
         for col in reversed(year_cols):
             try:
                 value = df_filtered[col].values[0]
                 if pd.notna(value) and value > 0:
-                    return float(value)
+                    return float(value) * 1000 / 1000
             except:
                 pass
-    
-    return 10.0
-
-
-# 3. ЛЕСНОЕ ХОЗЯЙСТВО
+    return 150.0
 
 def get_wood_price(wood_type: str, country: str = "Russian Federation") -> float:
     if forestry_value_df.empty:
         return 5000.0
-    
     wood_mapping = {
         "Сосна": "Sawnwood, coniferous", "Ель": "Sawnwood, coniferous",
         "Дуб": "Sawnwood, non-coniferous", "Береза": "Sawnwood, non-coniferous",
         "Тополь": "Wood fuel, non-coniferous"
     }
     english_name = wood_mapping.get(wood_type, "Sawnwood, coniferous")
-    
     df_filtered = forestry_value_df[
         (forestry_value_df['Item'] == english_name) &
         (forestry_value_df['Area'] == country)
     ]
-    
     if not df_filtered.empty:
         element_col = 'Export value' if 'Export value' in df_filtered['Element'].values else 'Import value'
         df_filtered = df_filtered[df_filtered['Element'] == element_col]
@@ -241,8 +135,7 @@ def get_wood_price(wood_type: str, country: str = "Russian Federation") -> float
                 return float(value) / 1000 * 100
     return 5000.0
 
-
-# ========== КЛАССЫ WeatherFetcher, Calculator, ModelPredictor ==========
+# ========== КЛАССЫ WeatherFetcher, Calculator ==========
 
 class WeatherFetcher:
     def get_radiation(self, lat, lon):
@@ -261,8 +154,8 @@ class WeatherFetcher:
                 annual = avg_daily * 365
                 if 800 <= annual <= 2200:
                     return round(annual, 0)
-        except Exception as e:
-            print(f"Ошибка радиации: {e}")
+        except:
+            pass
         rad = 1500 - abs(lat) * 8
         return round(max(800, min(2200, rad)), 0)
     
@@ -278,10 +171,9 @@ class WeatherFetcher:
                 if value != -999 and value is not None:
                     temps.append(float(value))
             if temps:
-                annual = np.mean(temps)
-                return round(annual, 1)
-        except Exception as e:
-            print(f"Ошибка температуры: {e}")
+                return round(np.mean(temps), 1)
+        except:
+            pass
         return 15.0
 
 class Calculator:
@@ -334,6 +226,8 @@ class Calculator:
             'roi_years': roi
         }
 
+# ========== ЗАГРУЗКА AI МОДЕЛЕЙ ==========
+
 class ModelPredictor:
     def __init__(self):
         self.models = {}
@@ -385,19 +279,16 @@ class CalculationRequest(BaseModel):
     region: Optional[str] = None
     country: Optional[str] = "Russian Federation"
     
-    # Растениеводство
     crop_price: Optional[float] = None
     base_yield: Optional[float] = None
     crop_name: Optional[str] = "Пшеница"
     
-    # Аквакультура
     fish_price: Optional[float] = None
     stocking_density: Optional[float] = 10
     oxygen_level: Optional[float] = 7
     pond_depth: Optional[float] = 3
     fish_name: Optional[str] = "Карп"
     
-    # Лесное хозяйство
     wood_price: Optional[float] = None
     tree_height: Optional[float] = 15
     canopy_density: Optional[float] = 0.6
@@ -407,7 +298,7 @@ class CalculationRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return {"service": "Agrivoltaic Calculator API", "version": "2.4", "status": "running"}
+    return {"service": "Agrivoltaic Calculator API", "version": "2.5", "status": "running"}
 
 @app.get("/health")
 def health():
@@ -415,8 +306,7 @@ def health():
 
 @app.get("/radiation")
 def get_radiation(lat: float, lon: float):
-    radiation = weather_fetcher.get_radiation(lat, lon)
-    return {"radiation": radiation, "lat": lat, "lon": lon}
+    return {"radiation": weather_fetcher.get_radiation(lat, lon), "lat": lat, "lon": lon}
 
 @app.post("/calculate")
 def calculate(request: CalculationRequest):
@@ -431,8 +321,34 @@ def calculate(request: CalculationRequest):
         
         # ========== РАСТЕНИЕВОДСТВО ==========
         if request.sector == "crop":
-            features = [request.lat, request.lon, 0.5, temp, 500.0, 120.0]
+            # Параметры культур
+            crop_params = {
+                "Пшеница": {"shade_tolerance": 0.35, "optimal_temp": 18, "water_requirement": 450, "growing_days": 120},
+                "Кукуруза": {"shade_tolerance": 0.30, "optimal_temp": 22, "water_requirement": 550, "growing_days": 130},
+                "Соя": {"shade_tolerance": 0.40, "optimal_temp": 20, "water_requirement": 500, "growing_days": 125},
+                "Подсолнечник": {"shade_tolerance": 0.45, "optimal_temp": 21, "water_requirement": 480, "growing_days": 110},
+                "Картофель": {"shade_tolerance": 0.50, "optimal_temp": 17, "water_requirement": 400, "growing_days": 100},
+                "Сахарная свекла": {"shade_tolerance": 0.55, "optimal_temp": 19, "water_requirement": 520, "growing_days": 140},
+                "Овощи": {"shade_tolerance": 0.60, "optimal_temp": 20, "water_requirement": 450, "growing_days": 90}
+            }
+            
+            params = crop_params.get(request.crop_name, crop_params["Пшеница"])
+            
+            features = [
+                request.lat,
+                request.lon,
+                params["shade_tolerance"],
+                params["optimal_temp"],
+                params["water_requirement"],
+                params["growing_days"]
+            ]
+            
             productivity_change = predictor.predict('crop', features)
+            
+            # Корректировка: урожайность должна снижаться (70-100%)
+            if productivity_change > 100:
+                productivity_change = 100 - (productivity_change - 100)
+            productivity_change = max(70, min(100, productivity_change))
             
             crop_price = request.crop_price if request.crop_price is not None else get_crop_price(request.crop_name, request.region)
             base_yield = request.base_yield if request.base_yield is not None else get_crop_yield(request.crop_name, request.country)
@@ -443,10 +359,9 @@ def calculate(request: CalculationRequest):
             
             result = {
                 "sector": "crop", "sector_name": "Растениеводство", "culture": request.crop_name,
-                "temperature_used": temp, "temperature_source": "NASA POWER" if request.temp is None else "user",
-                "region": request.region, "country": request.country,
-                "crop_price_used": crop_price, "crop_price_source": "авто" if request.crop_price is None else "пользователь",
-                "base_yield_used": base_yield, "base_yield_source": "FAO" if request.base_yield is None else "пользователь",
+                "temperature_used": temp,
+                "region": request.region,
+                "crop_price_used": crop_price, "base_yield_used": base_yield,
                 "productivity": {"value": productivity_change, "unit": "%", "label": "изменение урожайности"},
                 "energy": energy, "economics": economics
             }
@@ -455,18 +370,14 @@ def calculate(request: CalculationRequest):
         elif request.sector == "aqua":
             features = [request.lat, request.lon, temp, request.oxygen_level, request.stocking_density, request.pond_depth]
             productivity = predictor.predict('aqua', features)
-            
             fish_price = request.fish_price if request.fish_price is not None else get_aquaculture_value(request.fish_name)
-            
             product_income = productivity * request.area_ha * fish_price * 1000
             base_income = request.stocking_density * request.area_ha * fish_price * 1000
             economics = calculator.economics(energy, product_income, request.energy_price, capex_per_kw=70000)
-            
             result = {
                 "sector": "aqua", "sector_name": "Аквакультура", "culture": request.fish_name,
-                "temperature_used": temp, "temperature_source": "NASA POWER" if request.temp is None else "user",
-                "region": request.region,
-                "fish_price_used": fish_price, "fish_price_source": "FAO" if request.fish_price is None else "пользователь",
+                "temperature_used": temp, "region": request.region,
+                "fish_price_used": fish_price,
                 "productivity": {"value": productivity, "unit": "т/га", "label": "продуктивность"},
                 "energy": energy, "economics": economics
             }
@@ -475,18 +386,14 @@ def calculate(request: CalculationRequest):
         else:
             features = [request.lat, request.lon, request.tree_height, request.canopy_density, 1.0, 0.6]
             productivity = predictor.predict('forest', features)
-            
             wood_price = request.wood_price if request.wood_price is not None else get_wood_price(request.forest_name, request.country)
-            
             product_income = productivity * request.area_ha * wood_price
             base_income = 8 * request.area_ha * wood_price
             economics = calculator.economics(energy, product_income, request.energy_price)
-            
             result = {
                 "sector": "forest", "sector_name": "Лесное хозяйство", "culture": request.forest_name,
-                "temperature_used": temp, "temperature_source": "NASA POWER" if request.temp is None else "user",
-                "region": request.region, "country": request.country,
-                "wood_price_used": wood_price, "wood_price_source": "FAO" if request.wood_price is None else "пользователь",
+                "temperature_used": temp, "region": request.region,
+                "wood_price_used": wood_price,
                 "productivity": {"value": productivity, "unit": "м³/га/год", "label": "прирост древесины"},
                 "energy": energy, "economics": economics
             }
