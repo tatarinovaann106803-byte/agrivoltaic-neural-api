@@ -13,7 +13,7 @@ import urllib.request
 import json
 from datetime import datetime
 
-app = FastAPI(title="Agrivoltaic Calculator API", version="2.6")
+app = FastAPI(title="Agrivoltaic Calculator API", version="2.7")
 
 app.add_middleware(
     CORSMiddleware,
@@ -148,17 +148,15 @@ def get_wood_price(wood_type: str, country: str = "Russian Federation") -> float
                 return float(value) / 1000 * 100
     return 5000.0
 
-# ========== НОВАЯ ФУНКЦИЯ: РЕКОМЕНДАЦИИ НА ОСНОВЕ ДАННЫХ ==========
+# ========== ФУНКЦИЯ РЕКОМЕНДАЦИЙ НА ОСНОВЕ ДАННЫХ ==========
 
 def get_recommendations_from_data(sector: str, lat: float, crop_name: str = None):
     """
     Возвращает рекомендации по покрытию и высоте на основе реальных данных из sector_data.
-    НЕ МЕНЯЕТ существующую логику, только добавляет новые данные.
     """
     df = sector_data.get(sector, pd.DataFrame())
     
     if df.empty:
-        # Если данных нет — возвращаем значения по умолчанию для сектора
         defaults = {
             'crop_farming': {'coverage': 0.32, 'height': 2.5},
             'aquaculture': {'coverage': 0.30, 'height': 2.8},
@@ -166,7 +164,6 @@ def get_recommendations_from_data(sector: str, lat: float, crop_name: str = None
         }
         return defaults.get(sector, {'coverage': 0.30, 'height': 2.5})
     
-    # Ищем проекты с близкой широтой
     lat_range = 5.0
     filtered = df[abs(df['latitude'] - lat) <= lat_range]
     
@@ -368,7 +365,7 @@ class CalculationRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return {"service": "Agrivoltaic Calculator API", "version": "2.6", "status": "running"}
+    return {"service": "Agrivoltaic Calculator API", "version": "2.7", "status": "running"}
 
 @app.get("/health")
 def health():
@@ -378,13 +375,10 @@ def health():
 def get_radiation(lat: float, lon: float):
     return {"radiation": weather_fetcher.get_radiation(lat, lon), "lat": lat, "lon": lon}
 
-# ========== НОВЫЙ ЭНДПОИНТ: /recommendations ==========
-
 @app.post("/recommendations")
 def get_recommendations(request: CalculationRequest):
     """
-    Возвращает рекомендации по покрытию и высоте на основе реальных данных из sector_data.
-    НЕ ВЛИЯЕТ на работу /calculate.
+    Возвращает рекомендации по покрытию и высоте на основе реальных данных из sector_data
     """
     try:
         crop_name = request.crop_name if request.sector == "crop" else None
@@ -406,7 +400,7 @@ def get_recommendations(request: CalculationRequest):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# ========== ОСНОВНОЙ ЭНДПОИНТ: /calculate (БЕЗ ИЗМЕНЕНИЙ) ==========
+# ========== ОСНОВНОЙ ЭНДПОИНТ /calculate ==========
 
 @app.post("/calculate")
 def calculate(request: CalculationRequest):
@@ -443,12 +437,15 @@ def calculate(request: CalculationRequest):
                 params["growing_days"]
             ]
             
+            # ПРЕДСКАЗАНИЕ МОДЕЛИ (без искусственной корректировки)
             productivity_change = predictor.predict('crop', features)
             
-            # Корректировка: урожайность должна снижаться (70-100%)
-            if productivity_change > 100:
-                productivity_change = 100 - (productivity_change - 100)
-            productivity_change = max(70, min(100, productivity_change))
+            # Только защита от выбросов (если модель выдала нереальное число)
+            # Диапазон оставлен широким: от 50% до 150%, чтобы сохранить реальную вариативность
+            if productivity_change < 50:
+                productivity_change = 50.0
+            if productivity_change > 150:
+                productivity_change = 150.0
             
             crop_price = request.crop_price if request.crop_price is not None else get_crop_price(request.crop_name, request.region)
             base_yield = request.base_yield if request.base_yield is not None else get_crop_yield(request.crop_name, request.country)
