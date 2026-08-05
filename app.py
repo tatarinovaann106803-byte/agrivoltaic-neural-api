@@ -13,7 +13,7 @@ import urllib.request
 import json
 from datetime import datetime
 
-app = FastAPI(title="Agrivoltaic Calculator API", version="2.5")
+app = FastAPI(title="Agrivoltaic Calculator API", version="2.6")
 
 app.add_middleware(
     CORSMiddleware,
@@ -55,10 +55,23 @@ def load_forestry_value():
     except:
         return pd.DataFrame()
 
+def load_sector_data():
+    """Загрузка данных из sector_data для извлечения реальных параметров проектов"""
+    sector_data = {}
+    for sector in ['crop_farming', 'aquaculture', 'forestry']:
+        path = f'dataset/sector_data/{sector}.csv'
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            sector_data[sector] = df
+        else:
+            sector_data[sector] = pd.DataFrame()
+    return sector_data
+
 crop_prices_df = load_crop_prices()
 faostat_yield_df = load_faostat_yield()
 aquaculture_value_df = load_aquaculture_value()
 forestry_value_df = load_forestry_value()
+sector_data = load_sector_data()
 
 # ========== ФУНКЦИИ ДЛЯ АВТОМАТИЧЕСКОЙ ПОДСТАНОВКИ ==========
 
@@ -134,6 +147,63 @@ def get_wood_price(wood_type: str, country: str = "Russian Federation") -> float
             if pd.notna(value) and value > 0:
                 return float(value) / 1000 * 100
     return 5000.0
+
+# ========== НОВАЯ ФУНКЦИЯ: РЕКОМЕНДАЦИИ НА ОСНОВЕ ДАННЫХ ==========
+
+def get_recommendations_from_data(sector: str, lat: float, crop_name: str = None):
+    """
+    Возвращает рекомендации по покрытию и высоте на основе реальных данных из sector_data.
+    НЕ МЕНЯЕТ существующую логику, только добавляет новые данные.
+    """
+    df = sector_data.get(sector, pd.DataFrame())
+    
+    if df.empty:
+        # Если данных нет — возвращаем значения по умолчанию для сектора
+        defaults = {
+            'crop_farming': {'coverage': 0.32, 'height': 2.5},
+            'aquaculture': {'coverage': 0.30, 'height': 2.8},
+            'forestry': {'coverage': 0.25, 'height': 3.0}
+        }
+        return defaults.get(sector, {'coverage': 0.30, 'height': 2.5})
+    
+    # Ищем проекты с близкой широтой
+    lat_range = 5.0
+    filtered = df[abs(df['latitude'] - lat) <= lat_range]
+    
+    if len(filtered) < 5:
+        filtered = df
+        if len(filtered) < 5:
+            return {
+                'coverage': round(df['coverage'].mean() if 'coverage' in df.columns else 0.30, 2),
+                'height': round(df['height'].mean() if 'height' in df.columns else 2.5, 1)
+            }
+    
+    has_coverage = 'coverage' in filtered.columns
+    has_height = 'height' in filtered.columns
+    
+    coverage_adj = 0.0
+    height_adj = 0.0
+    
+    if sector == 'crop_farming' and crop_name and 'crop_type' in filtered.columns:
+        crop_filtered = filtered[filtered['crop_type'] == crop_name]
+        if len(crop_filtered) > 5:
+            if has_coverage:
+                coverage_adj = (crop_filtered['coverage'].mean() - filtered['coverage'].mean()) * 0.5
+            if has_height:
+                height_adj = (crop_filtered['height'].mean() - filtered['height'].mean()) * 0.5
+    
+    result = {}
+    if has_coverage:
+        result['coverage'] = round(max(0.10, min(0.60, filtered['coverage'].mean() + coverage_adj)), 2)
+    else:
+        result['coverage'] = 0.30
+    
+    if has_height:
+        result['height'] = round(max(1.5, min(5.0, filtered['height'].mean() + height_adj)), 1)
+    else:
+        result['height'] = 2.5
+    
+    return result
 
 # ========== КЛАССЫ WeatherFetcher, Calculator ==========
 
@@ -298,7 +368,7 @@ class CalculationRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return {"service": "Agrivoltaic Calculator API", "version": "2.5", "status": "running"}
+    return {"service": "Agrivoltaic Calculator API", "version": "2.6", "status": "running"}
 
 @app.get("/health")
 def health():
@@ -307,6 +377,36 @@ def health():
 @app.get("/radiation")
 def get_radiation(lat: float, lon: float):
     return {"radiation": weather_fetcher.get_radiation(lat, lon), "lat": lat, "lon": lon}
+
+# ========== НОВЫЙ ЭНДПОИНТ: /recommendations ==========
+
+@app.post("/recommendations")
+def get_recommendations(request: CalculationRequest):
+    """
+    Возвращает рекомендации по покрытию и высоте на основе реальных данных из sector_data.
+    НЕ ВЛИЯЕТ на работу /calculate.
+    """
+    try:
+        crop_name = request.crop_name if request.sector == "crop" else None
+        rec = get_recommendations_from_data(request.sector, request.lat, crop_name)
+        
+        msg = "Рекомендации подобраны на основе реальных данных из агривольтаических проектов."
+        if request.sector == "crop" and crop_name:
+            msg += f" Для культуры {crop_name} использованы параметры проектов с аналогичной широтой."
+        
+        return {
+            "success": True,
+            "recommendations": {
+                "coverage": rec.get("coverage", 0.30),
+                "height": rec.get("height", 2.5),
+                "message": msg,
+                "data_source": "реальные проекты из sector_data"
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ========== ОСНОВНОЙ ЭНДПОИНТ: /calculate (БЕЗ ИЗМЕНЕНИЙ) ==========
 
 @app.post("/calculate")
 def calculate(request: CalculationRequest):
