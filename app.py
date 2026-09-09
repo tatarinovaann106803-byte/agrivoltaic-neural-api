@@ -218,7 +218,7 @@ class WeatherFetcher:
                     daily_values.append(float(value))
             if daily_values:
                 avg_daily = np.mean(daily_values)
-                annual = avg_daily * 365
+                annual = avg_daily * 365 / 3.6
                 if 800 <= annual <= 2200:
                     return round(annual, 0)
         except:
