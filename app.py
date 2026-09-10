@@ -202,29 +202,74 @@ def get_recommendations_from_data(sector: str, lat: float, crop_name: str = None
     
     return result
 
-# ========== КЛАССЫ WeatherFetcher, Calculator ==========
+# ========== КЛАСС WeatherFetcher (ИСПРАВЛЕННЫЙ) ==========
 
 class WeatherFetcher:
     def get_radiation(self, lat, lon):
+        """
+        Получение данных о солнечной радиации с NASA POWER API
+        
+        Args:
+            lat (float): Широта
+            lon (float): Долгота
+        
+        Returns:
+            tuple: (годовая_радиация_kWh, список_месячных_kWh, источник)
+                - годовая_радиация_kWh: в kWh/m²/year
+                - список_месячных_kWh: 12 значений в kWh/m²/month
+                - источник: 'NASA API' или 'Расчетный (fallback)'
+        """
         try:
             url = f"https://power.larc.nasa.gov/api/temporal/monthly/point?parameters=ALLSKY_SFC_SW_DWN&community=AG&longitude={lon}&latitude={lat}&start=2023&end=2024&format=JSON"
             req = urllib.request.Request(url)
             req.add_header('User-Agent', 'Mozilla/5.0')
+            
             with urllib.request.urlopen(req, timeout=15) as response:
                 data = json.loads(response.read().decode())
+            
+            # Извлекаем все значения (включая среднегодовые)
             daily_values = []
             for month, value in data['properties']['parameter']['ALLSKY_SFC_SW_DWN'].items():
                 if value != -999 and value is not None:
                     daily_values.append(float(value))
+            
             if daily_values:
-                avg_daily = np.mean(daily_values)
-                annual = avg_daily * 365 / 3.6
-                if 800 <= annual <= 2200:
-                    return round(annual, 0)
-        except:
-            pass
+                avg_daily_mj = np.mean(daily_values)
+                # Пересчет: MJ/m²/day → kWh/m²/year
+                annual_kwh = avg_daily_mj * 365 / 3.6
+                
+                # Проверка корректности (диапазон для kWh/m²/year)
+                if 800 <= annual_kwh <= 2200:
+                    # Формируем месячные значения для 2024 года
+                    monthly_kwh = []
+                    for m in range(1, 13):
+                        key = f'2024{m:02d}'
+                        if key in data['properties']['parameter']['ALLSKY_SFC_SW_DWN']:
+                            value = data['properties']['parameter']['ALLSKY_SFC_SW_DWN'][key]
+                            if value != -999 and value is not None:
+                                # MJ/m²/day → kWh/m²/month
+                                monthly_kwh.append(float(value) * 365 / 12 / 3.6)
+                            else:
+                                monthly_kwh.append(0.0)
+                        else:
+                            monthly_kwh.append(0.0)
+                    
+                    return round(annual_kwh, 0), monthly_kwh, 'NASA API'
+        
+        except Exception as e:
+            print(f"⚠️ Ошибка запроса к NASA API: {e}")
+        
+        # ЗАПАСНОЙ ВАРИАНТ (kWh/m²/year)
         rad = 1500 - abs(lat) * 8
-        return round(max(800, min(2200, rad)), 0)
+        rad = max(800, min(2200, rad))
+        monthly = [rad / 12] * 12
+        
+        return round(rad, 0), monthly, 'Расчетный (fallback)'
+    
+    def get_radiation_annual(self, lat, lon):
+        """Для обратной совместимости - возвращает только годовое значение"""
+        annual, _, _ = self.get_radiation(lat, lon)
+        return annual
     
     def get_temperature(self, lat, lon):
         try:
@@ -243,39 +288,98 @@ class WeatherFetcher:
             pass
         return 15.0
 
+# ========== КЛАСС Calculator (ИСПРАВЛЕННЫЙ) ==========
+
 class Calculator:
     def __init__(self):
-        self.panel_width = 2.134
-        self.panel_height = 1.051
-        self.panel_power = 0.445
-        self.panel_area = self.panel_width * self.panel_height
-        self.panel_efficiency = 0.20
+        self.panel_width = 2.134      # метра
+        self.panel_height = 1.051     # метра
+        self.panel_power = 0.445      # кВт (445 Вт)
+        self.panel_area = self.panel_width * self.panel_height  # м²
+        self.panel_efficiency = 0.24  # 24% (современные панели)
         
+        # Потери эффективности
+        self.soiling_loss = 0.97      # загрязнение
+        self.thermal_loss = 0.94      # нагрев
+        self.inverter_loss = 0.97     # инвертор
+        self.cable_loss = 0.98        # кабели
+        self.mismatch_loss = 0.99     # несоответствие
+        
+        self.total_efficiency = (self.soiling_loss * self.thermal_loss * 
+                                 self.inverter_loss * self.cable_loss * self.mismatch_loss)
+    
+    def monthly_radiation(self, lat, annual_radiation):
+        """
+        Разбивает годовую радиацию на месячные значения с учетом широты
+        
+        Args:
+            lat (float): Широта
+            annual_radiation (float): Годовая радиация в kWh/m²
+        
+        Returns:
+            np.array: Массив из 12 месячных значений в kWh/m²/month
+        """
+        months = np.arange(1, 13)
+        
+        # Склонение солнца по месяцам
+        declination = -23.45 * np.cos(2 * np.pi * (months - 1) / 12)
+        
+        # Высота солнца
+        sun_alt = 90 - np.abs(lat - declination)
+        sun_alt = np.clip(sun_alt, 10, 90)
+        
+        # Относительный фактор для каждого месяца
+        monthly_factor = np.sin(np.radians(sun_alt)) / np.sin(np.radians(90 - np.abs(lat)))
+        monthly_factor = monthly_factor / monthly_factor.sum() * 12
+        
+        return annual_radiation / 12 * monthly_factor
+    
     def solar_energy_pvsyst(self, area_ha, coverage, radiation, lat):
+        """
+        Расчет солнечной энергии с учетом сезонности
+        
+        Args:
+            area_ha (float): Площадь в гектарах
+            coverage (float): Коэффициент покрытия панелями (0-1)
+            radiation (float): Годовая радиация в kWh/m²/year
+            lat (float): Широта
+        
+        Returns:
+            dict: Результаты расчета
+        """
         area_m2 = area_ha * 10000
         panel_area_total = area_m2 * coverage
+        
+        # Количество панелей
         num_panels = int(panel_area_total / self.panel_area)
-        total_power = num_panels * self.panel_power
+        if num_panels < 1:
+            num_panels = 1
+        total_power = num_panels * self.panel_power  # кВт
+        
+        # Оптимальный угол наклона
         tilt_optimal = abs(lat) * 0.9 + 5
         tilt_optimal = min(55, max(20, tilt_optimal))
         tilt_factor = np.cos(np.radians(tilt_optimal - abs(lat))) * 0.95 + 0.05
-        soiling_loss = 0.97
-        thermal_loss = 0.92
-        inverter_loss = 0.97
-        cable_loss = 0.98
-        mismatch_loss = 0.99
-        total_efficiency = soiling_loss * thermal_loss * inverter_loss * cable_loss * mismatch_loss
-        annual_energy = panel_area_total * radiation * total_efficiency * self.panel_efficiency * tilt_factor
+        
+        # Получаем месячное распределение радиации
+        monthly_rad = self.monthly_radiation(lat, radiation)
+        
+        # Расчет месячной энергии
+        monthly_energy = (panel_area_total * monthly_rad * 
+                         self.total_efficiency * self.panel_efficiency * tilt_factor)
+        
+        annual_energy = monthly_energy.sum()
         specific_yield = annual_energy / total_power if total_power > 0 else 0
-        monthly_energy = [annual_energy / 12] * 12
+        
         return {
             'num_panels': num_panels,
             'total_power': total_power,
             'annual_energy': annual_energy,
-            'monthly_energy': monthly_energy,
+            'monthly_energy': monthly_energy.tolist(),  # список из 12 значений
             'tilt_angle': tilt_optimal,
             'specific_yield': specific_yield,
-            'total_efficiency': total_efficiency
+            'total_efficiency': self.total_efficiency,
+            'panel_area_total': panel_area_total
         }
     
     def economics(self, energy, product_income, energy_price, capex_per_kw=60000):
@@ -372,8 +476,18 @@ def health():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 @app.get("/radiation")
-def get_radiation(lat: float, lon: float):
-    return {"radiation": weather_fetcher.get_radiation(lat, lon), "lat": lat, "lon": lon}
+def get_radiation_endpoint(lat: float, lon: float):
+    """
+    Возвращает годовую радиацию и месячное распределение
+    """
+    annual, monthly, source = weather_fetcher.get_radiation(lat, lon)
+    return {
+        "radiation_annual": annual,
+        "radiation_monthly": monthly,
+        "source": source,
+        "lat": lat,
+        "lon": lon
+    }
 
 @app.post("/recommendations")
 def get_recommendations(request: CalculationRequest):
@@ -405,17 +519,19 @@ def get_recommendations(request: CalculationRequest):
 @app.post("/calculate")
 def calculate(request: CalculationRequest):
     try:
-        radiation = weather_fetcher.get_radiation(request.lat, request.lon)
+        # Получаем радиацию (годовую и месячную)
+        radiation_annual, radiation_monthly, radiation_source = weather_fetcher.get_radiation(request.lat, request.lon)
+        
         auto_temp = weather_fetcher.get_temperature(request.lat, request.lon)
         temp = request.temp if request.temp is not None else auto_temp
         
+        # Энергетический расчет с сезонностью
         energy = calculator.solar_energy_pvsyst(
-            request.area_ha, request.coverage, radiation, request.lat
+            request.area_ha, request.coverage, radiation_annual, request.lat
         )
         
         # ========== РАСТЕНИЕВОДСТВО ==========
         if request.sector == "crop":
-            # Параметры культур
             crop_params = {
                 "Пшеница": {"shade_tolerance": 0.35, "optimal_temp": 18, "water_requirement": 450, "growing_days": 120},
                 "Кукуруза": {"shade_tolerance": 0.30, "optimal_temp": 22, "water_requirement": 550, "growing_days": 130},
@@ -429,19 +545,13 @@ def calculate(request: CalculationRequest):
             params = crop_params.get(request.crop_name, crop_params["Пшеница"])
             
             features = [
-                request.lat,
-                request.lon,
-                params["shade_tolerance"],
-                params["optimal_temp"],
-                params["water_requirement"],
-                params["growing_days"]
+                request.lat, request.lon,
+                params["shade_tolerance"], params["optimal_temp"],
+                params["water_requirement"], params["growing_days"]
             ]
             
-            # ПРЕДСКАЗАНИЕ МОДЕЛИ (без искусственной корректировки)
             productivity_change = predictor.predict('crop', features)
             
-            # Только защита от выбросов (если модель выдала нереальное число)
-            # Диапазон оставлен широким: от 50% до 150%, чтобы сохранить реальную вариативность
             if productivity_change < 50:
                 productivity_change = 50.0
             if productivity_change > 150:
@@ -451,13 +561,11 @@ def calculate(request: CalculationRequest):
             base_yield = request.base_yield if request.base_yield is not None else get_crop_yield(request.crop_name, request.country)
             
             product_income = base_yield * request.area_ha * (productivity_change / 100) * crop_price
-            base_income = base_yield * request.area_ha * crop_price
             economics = calculator.economics(energy, product_income, request.energy_price)
             
             result = {
                 "sector": "crop", "sector_name": "Растениеводство", "culture": request.crop_name,
-                "temperature_used": temp,
-                "region": request.region,
+                "temperature_used": temp, "region": request.region,
                 "crop_price_used": crop_price, "base_yield_used": base_yield,
                 "productivity": {"value": productivity_change, "unit": "%", "label": "изменение урожайности"},
                 "energy": energy, "economics": economics
@@ -469,7 +577,6 @@ def calculate(request: CalculationRequest):
             productivity = predictor.predict('aqua', features)
             fish_price = request.fish_price if request.fish_price is not None else get_aquaculture_value(request.fish_name)
             product_income = productivity * request.area_ha * fish_price * 1000
-            base_income = request.stocking_density * request.area_ha * fish_price * 1000
             economics = calculator.economics(energy, product_income, request.energy_price, capex_per_kw=70000)
             result = {
                 "sector": "aqua", "sector_name": "Аквакультура", "culture": request.fish_name,
@@ -485,7 +592,6 @@ def calculate(request: CalculationRequest):
             productivity = predictor.predict('forest', features)
             wood_price = request.wood_price if request.wood_price is not None else get_wood_price(request.forest_name, request.country)
             product_income = productivity * request.area_ha * wood_price
-            base_income = 8 * request.area_ha * wood_price
             economics = calculator.economics(energy, product_income, request.energy_price)
             result = {
                 "sector": "forest", "sector_name": "Лесное хозяйство", "culture": request.forest_name,
@@ -495,7 +601,10 @@ def calculate(request: CalculationRequest):
                 "energy": energy, "economics": economics
             }
         
-        result["radiation"] = radiation
+        # Добавляем информацию о радиации
+        result["radiation"] = radiation_annual
+        result["radiation_monthly"] = radiation_monthly
+        result["radiation_source"] = radiation_source
         result["location"] = {"lat": request.lat, "lon": request.lon}
         result["area_ha"] = request.area_ha
         result["coverage"] = request.coverage
