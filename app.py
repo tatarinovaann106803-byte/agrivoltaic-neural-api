@@ -540,7 +540,7 @@ def calculate(request: CalculationRequest):
                 "Подсолнечник": {"shade_tolerance": 0.45, "optimal_temp": 21, "water_requirement": 480, "growing_days": 110},
                 "Картофель": {"shade_tolerance": 0.50, "optimal_temp": 17, "water_requirement": 400, "growing_days": 100},
                 "Сахарная свекла": {"shade_tolerance": 0.55, "optimal_temp": 19, "water_requirement": 520, "growing_days": 140},
-                "Овощи": {"shade_tolerance": 0.60, "optimal_temp": 20, "water_requirement": 450, "growing_days": 90}
+                "Овощи": {"shade_tolerance": 0.60, "optimal_temp": 20, "water_requirement": 450, "growing_days": 90},
                 "Виноград": {"shade_tolerance": 0.45, "optimal_temp": 22, "water_requirement": 500, "growing_days": 180}
             }
             
