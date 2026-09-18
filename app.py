@@ -93,7 +93,8 @@ def get_crop_yield(crop_name: str, country: str = "Russian Federation") -> float
     crop_mapping = {
         "Пшеница": "Wheat", "Кукуруза": "Maize", "Соя": "Soybeans",
         "Подсолнечник": "Sunflower seed", "Картофель": "Potatoes",
-        "Сахарная свекла": "Sugar beet", "Овощи": "Vegetables"
+        "Сахарная свекла": "Sugar beet", "Овощи": "Vegetables",
+        "Виноград", "Grape"
     }
     english_name = crop_mapping.get(crop_name, crop_name)
     df_filtered = faostat_yield_df[
@@ -540,6 +541,7 @@ def calculate(request: CalculationRequest):
                 "Картофель": {"shade_tolerance": 0.50, "optimal_temp": 17, "water_requirement": 400, "growing_days": 100},
                 "Сахарная свекла": {"shade_tolerance": 0.55, "optimal_temp": 19, "water_requirement": 520, "growing_days": 140},
                 "Овощи": {"shade_tolerance": 0.60, "optimal_temp": 20, "water_requirement": 450, "growing_days": 90}
+                "Виноград": {"shade_tolerance": 0.45, "optimal_temp": 22, "water_requirement": 500, "growing_days": 180}
             }
             
             params = crop_params.get(request.crop_name, crop_params["Пшеница"])
