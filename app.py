@@ -94,7 +94,7 @@ def get_crop_yield(crop_name: str, country: str = "Russian Federation") -> float
         "Пшеница": "Wheat", "Кукуруза": "Maize", "Соя": "Soybeans",
         "Подсолнечник": "Sunflower seed", "Картофель": "Potatoes",
         "Сахарная свекла": "Sugar beet", "Овощи": "Vegetables",
-        "Виноград", "Grape"
+        "Виноград": "Grape"
     }
     english_name = crop_mapping.get(crop_name, crop_name)
     df_filtered = faostat_yield_df[
